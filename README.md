@@ -235,3 +235,172 @@ If we hash our passwords, we need to inform the framework to use a HashedCredent
 
 # 7. Logging Out
 Now that we've authenticated the user, it's time to implement log out. That's done simply by calling a single method – which invalidates the user session and logs the user out:
+
+```
+currentUser.logout();
+```
+
+# 8. Gerenciamento de Sessão
+O framework vem naturalmente com seu sistema de gerenciamento de sessão. Se usado em um ambiente da web, o padrão é a implementação HttpSession.
+
+Para um aplicativo independente, ele usa seu sistema de gerenciamento de sessão corporativa. O benefício é que, mesmo em um ambiente de desktop, você pode usar um objeto de sessão como faria em um ambiente típico da Web.
+
+Vamos dar uma olhada em um exemplo rápido e interagir com a sessão do usuário atual:
+
+```
+Session session = currentUser.getSession();                
+session.setAttribute("key", "value");                      
+String value = (String) session.getAttribute("key");       
+if (value.equals("value")) {                               
+    log.info("Retrieved the correct value! [" + value + "]");
+}
+```
+
+# 9. Shiro para um aplicativo da Web com Spring
+Até agora, descrevemos a estrutura básica do Apache Shiro e a implementamos em um ambiente de desktop. Vamos prosseguir integrando a estrutura em um aplicativo Spring Boot.
+
+Observe que o foco principal aqui é Shiro, não o aplicativo Spring - vamos usar isso apenas para alimentar um aplicativo de exemplo simples.
+
+### 9.1 Dependências
+Primeiro, precisamos adicionar a dependência pai Spring Boot ao nosso pom.xml:
+
+```
+<parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <version>2.5.1</version>
+</parent>
+```
+
+Em seguida, temos que adicionar as seguintes dependências ao mesmo arquivo pom.xml:
+
+```
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-web</artifactId>
+</dependency>
+<dependency>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-freemarker</artifactId>
+</dependency>
+<dependency>
+    <groupId>org.apache.shiro</groupId>
+    <artifactId>shiro-spring-boot-web-starter</artifactId>
+    <version>${apache-shiro-core-version}</version>
+</dependency>
+```
+
+### 9.2. Configuração
+Adicionar a dependência shiro-spring-boot-web-starter ao nosso pom.xml configurará por padrão alguns recursos do aplicativo Apache Shiro, como o SecurityManager.
+
+No entanto, ainda precisamos configurar os filtros de segurança Realm e Shiro. Estaremos usando o mesmo domínio personalizado definido acima.
+
+E assim, na classe principal onde o aplicativo Spring Boot é executado, vamos adicionar as seguintes definições de Bean:
+
+```
+@Bean
+public Realm realm() {
+    return new MyCustomRealm();
+}
+    
+@Bean
+public ShiroFilterChainDefinition shiroFilterChainDefinition() {
+    DefaultShiroFilterChainDefinition filter
+      = new DefaultShiroFilterChainDefinition();
+
+    filter.addPathDefinition("/secure", "authc");
+    filter.addPathDefinition("/**", "anon");
+
+    return filter;
+}
+```
+
+No ShiroFilterChainDefinition, aplicamos o filtro authc ao caminho / seguro e aplicamos o filtro anon em outros caminhos usando o padrão Ant.
+
+Os filtros authc e anon vêm por padrão para aplicativos da web. Outros filtros padrão podem ser encontrados aqui.
+
+Se não definimos o bean Realm, ShiroAutoConfiguration irá, por padrão, fornecer uma implementação IniRealm que espera encontrar um arquivo shiro.ini em src/main/resources ou src/main/resources/META-INF.
+
+Se não definirmos um bean ShiroFilterChainDefinition, a estrutura protege todos os caminhos e define a URL de login como login.jsp.
+
+Podemos alterar este URL de login padrão e outros padrões, adicionando as seguintes entradas ao nosso application.properties:
+
+```
+shiro.loginUrl = /login
+shiro.successUrl = /secure
+shiro.unauthorizedUrl = /login
+```
+
+Agora que o filtro authc foi aplicado a / secure, todas as solicitações para essa rota exigirão uma autenticação de formulário.
+
+### 9.3. Autenticação e autorização
+Vamos criar um ShiroSpringController com os seguintes mapeamentos de caminho: /index, /login, /logout e /secure.
+
+O método login() é onde implementamos a autenticação do usuário real conforme descrito acima. Se a autenticação for bem-sucedida, o usuário será redirecionado para a página segura:
+
+```
+Subject subject = SecurityUtils.getSubject();
+
+if(!subject.isAuthenticated()) {
+    UsernamePasswordToken token = new UsernamePasswordToken(
+      cred.getUsername(), cred.getPassword(), cred.isRememberMe());
+    try {
+        subject.login(token);
+    } catch (AuthenticationException ae) {
+        ae.printStackTrace();
+        attr.addFlashAttribute("error", "Invalid Credentials");
+        return "redirect:/login";
+    }
+}
+
+return "redirect:/secure";
+```
+
+E agora, na implementação secure(), o currentUser foi obtido invocando o SecurityUtils.getSubject(). A função e as permissões do usuário são passadas para a página segura, assim como o principal do usuário:
+
+```
+Subject currentUser = SecurityUtils.getSubject();
+String role = "", permission = "";
+
+if(currentUser.hasRole("admin")) {
+    role = role  + "You are an Admin";
+} else if(currentUser.hasRole("editor")) {
+    role = role + "You are an Editor";
+} else if(currentUser.hasRole("author")) {
+    role = role + "You are an Author";
+}
+
+if(currentUser.isPermitted("articles:compose")) {
+    permission = permission + "You can compose an article, ";
+} else {
+    permission = permission + "You are not permitted to compose an article!, ";
+}
+
+if(currentUser.isPermitted("articles:save")) {
+    permission = permission + "You can save articles, ";
+} else {
+    permission = permission + "\nYou can not save articles, ";
+}
+
+if(currentUser.isPermitted("articles:publish")) {
+    permission = permission  + "\nYou can publish articles";
+} else {
+    permission = permission + "\nYou can not publish articles";
+}
+
+modelMap.addAttribute("username", currentUser.getPrincipal());
+modelMap.addAttribute("permission", permission);
+modelMap.addAttribute("role", role);
+
+return "secure";
+```
+
+E terminamos. É assim que podemos integrar o Apache Shiro em um aplicativo Spring Boot.
+
+Além disso, observe que a estrutura oferece anotações adicionais que podem ser usadas junto com as definições da cadeia de filtros para proteger nosso aplicativo.
+
+# 10. Integração JEE
+A integração do Apache Shiro em um aplicativo JEE é apenas uma questão de configuração do arquivo web.xml. Como de costume, a configuração espera que o shiro.ini esteja no caminho da classe. Um exemplo de configuração detalhado está disponível aqui. Além disso, as tags JSP podem ser encontradas aqui.
+
+# 11. Conclusão
+Neste tutorial, vimos os mecanismos de autenticação e autorização do Apache Shiro. Também nos concentramos em como definir um domínio personalizado e conectá-lo ao SecurityManager.
